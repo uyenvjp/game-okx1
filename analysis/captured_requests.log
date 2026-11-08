@@ -1,0 +1,3 @@
+[1793977226] GET http://notice.bigshot-games.xyz/timestamp
+  HEADERS: {'Host': 'notice.bigshot-games.xyz', 'User-Agent': 'curl/8.23.0', 'Accept': '*/*', 'Proxy-Connection': 'Keep-Alive'}
+

@@ -1,0 +1,196 @@
+{
+  "project_info": {
+    "project_number": "159421804656",
+    "firebase_url": "https://legendaryitem-77630493.firebaseio.com",
+    "project_id": "legendaryitem-77630493",
+    "storage_bucket": "legendaryitem-77630493.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:159421804656:android:4563fef37ed57efc",
+        "android_client_info": {
+          "package_name": "com.bigshotgames.legendaryItem"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "159421804656-2gq2bk9gm9nm66l0csccqb8sbg3neari.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBHMLdSVFvrnQHF18d0A1RrdcH_jf70f6o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "159421804656-2gq2bk9gm9nm66l0csccqb8sbg3neari.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "159421804656-10d1nvab27dainngbj9jtb5p9q7okasc.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.bigshotgames.legendaryItem",
+                "app_store_id": "1435116356"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:159421804656:android:3842c959b3bc647a",
+        "android_client_info": {
+          "package_name": "com.bigshotgames.legendaryItemOne"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "159421804656-2gq2bk9gm9nm66l0csccqb8sbg3neari.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBHMLdSVFvrnQHF18d0A1RrdcH_jf70f6o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "159421804656-2gq2bk9gm9nm66l0csccqb8sbg3neari.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "159421804656-10d1nvab27dainngbj9jtb5p9q7okasc.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.bigshotgames.legendaryItem",
+                "app_store_id": "1435116356"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:159421804656:android:4a63de331c0846f38c04b5",
+        "android_client_info": {
+          "package_name": "com.bigshotgames.legendaryItemPlatinum"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "159421804656-2gq2bk9gm9nm66l0csccqb8sbg3neari.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBHMLdSVFvrnQHF18d0A1RrdcH_jf70f6o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "159421804656-2gq2bk9gm9nm66l0csccqb8sbg3neari.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "159421804656-10d1nvab27dainngbj9jtb5p9q7okasc.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.bigshotgames.legendaryItem",
+                "app_store_id": "1435116356"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:159421804656:android:2d8f1a472418a3488c04b5",
+        "android_client_info": {
+          "package_name": "com.bigshotgames.legendaryItemSuper"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "159421804656-2gq2bk9gm9nm66l0csccqb8sbg3neari.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBHMLdSVFvrnQHF18d0A1RrdcH_jf70f6o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "159421804656-2gq2bk9gm9nm66l0csccqb8sbg3neari.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "159421804656-10d1nvab27dainngbj9jtb5p9q7okasc.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.bigshotgames.legendaryItem",
+                "app_store_id": "1435116356"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:159421804656:android:20deef42fa972f7d8c04b5",
+        "android_client_info": {
+          "package_name": "com.bigshotgames.legendaryItemVip"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "159421804656-2gq2bk9gm9nm66l0csccqb8sbg3neari.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBHMLdSVFvrnQHF18d0A1RrdcH_jf70f6o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "159421804656-2gq2bk9gm9nm66l0csccqb8sbg3neari.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "159421804656-10d1nvab27dainngbj9jtb5p9q7okasc.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.bigshotgames.legendaryItem",
+                "app_store_id": "1435116356"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
