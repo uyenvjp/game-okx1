@@ -75,7 +75,12 @@ class H(BaseHTTPRequestHandler):
         if isinstance(data, (dict, list)): data = json.dumps(data)
         if isinstance(data, str): data = data.encode()
         self.send_response(code); self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(data))); self.end_headers()
+        self.send_header("Content-Length", str(len(data)))
+        # Force a fresh connection per request: UnityWebRequest/libcurl otherwise
+        # reuses keep-alive sockets and hits ConnectionError ("Unable to complete
+        # SSL connection") when a worker thread closes the socket between requests.
+        self.send_header("Connection", "close"); self.close_connection = True
+        self.end_headers()
         self.wfile.write(data); log("   ->", code, data[:260])
 
     def _params(self, body):

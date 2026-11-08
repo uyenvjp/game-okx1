@@ -51,6 +51,12 @@ Nó: mở mock server → `adb reverse tcp:8080 tcp:<port>` → cài `game_fix_s
 - `local.keystore` — key ký APK (storepass/keypass: android)
 - `gameplay.png`, `login_screen.png` — ảnh minh chứng
 
+## Đã xử lý popup lỗi kết nối (SSL)
+- APK giờ patch CẢ metadata (literal `notice.*`) → không còn call HTTPS tới domain chết.
+- `mock_server.py` trả `Connection: close` (UnityWebRequest/libcurl reuse keep-alive socket
+  gây ConnectionError "Unable to complete SSL connection"). → hết popup lỗi.
+- Popup còn lại chỉ là notice hợp lệ "Thông báo kết thúc dịch vụ" (nội dung game, bấm OK qua).
+
 ## Còn lại (minor, không chặn chơi)
 - Một call phụ vẫn gọi HTTPS tới domain chết → popup **"Unable to complete SSL connection"**
   (bấm OK qua được). Nhiều khả năng là `WebAccessStatics.Adress` thứ hai / socket.io chat —
