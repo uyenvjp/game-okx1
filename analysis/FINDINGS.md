@@ -1,3 +1,7 @@
+> # ⚠️ TÀI LIỆU NÀY ĐÃ LỖI THỜI / SAI — xem `fukkuvn/README.md`
+> Nội dung bên dưới SAI (nhầm server `notice.bigshot-games.xyz`, nhầm format endpoint...).
+> Server API thật là `legendaryitem.bigshot-games.xyz`, protocol đúng + bản chạy được nằm trong
+> thư mục **`fukkuvn/`**. — *Credit: FukkuVN*
 # Dungeon Corporation — Reverse Engineering Analysis
 
 ## Game Info
