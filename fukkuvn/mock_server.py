@@ -20,13 +20,15 @@ Key facts proven from the binary:
   * WebKeys values are camelCase w/o underscore (proven: platform=guest, userID=, timestamp=).
   * /timestamp returns PLAIN epoch-seconds text.
 
-Persistent cloud save: /backup stores the client's save blob per userID to state.json;
-/restore returns it as RestoreObj{result,resultCode,content{type,data},lastRestoreTime}.
-(Normal progress also persists LOCALLY on-device via SaveData's encrypted file.)
+Server-side save (FkSync, injected into the APK as classes4.dex): the player's whole
+save is the "saveData" PlayerPrefs key. The client pulls it from /fk/load before Unity
+starts and pushes it to /fk/save on change / pause, so the server is the source of
+truth. Saves live in saves/<account>.json with the last HISTORY_MAX versions kept.
+The game's own cloud save (/backup, /restore) still works on top of that.
 
 Run:  py -3 mock_server.py <port>     (device :8080 -> host :port via adb reverse)
 """
-import json, time, sys, hashlib, os, threading
+import json, time, sys, hashlib, hmac, os, re, threading, uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -51,20 +53,71 @@ def save_state(st):
 
 STATE = load_state()
 
-def guest_id(seed): return "guest" + hashlib.md5((seed or "guest").encode()).hexdigest()[:12]
+SAVES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saves")
+HISTORY_MAX = 20
+
+def _save_path(account):
+    return os.path.join(SAVES_DIR, re.sub(r"[^A-Za-z0-9._-]", "_", account)[:80] + ".json")
+
+def load_account(account):
+    try:
+        with open(_save_path(account), encoding="utf-8") as f: return json.load(f)
+    except Exception: return {"current": None, "history": []}
+
+def store_account(account, rec):
+    os.makedirs(SAVES_DIR, exist_ok=True)
+    path = _save_path(account); tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f: json.dump(rec, f)
+    os.replace(tmp, path)
+
+# --- player accounts (username/password) for FkSync ---------------------------
+# Saves of a logged-in player live under account "u:<username lowercased>"; that
+# account is only readable/writable with one of its session tokens. Device
+# accounts ("dev-...") stay open so a player can play before signing in.
+ACCOUNTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "accounts.json")
+USER_RE = re.compile(r"^[A-Za-z0-9_.-]{3,20}$")
+TOKENS_MAX = 10
+
+def load_accounts():
+    try:
+        with open(ACCOUNTS_FILE, encoding="utf-8") as f: return json.load(f)
+    except Exception: return {}
+
+def save_accounts():
+    tmp = ACCOUNTS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f: json.dump(ACCOUNTS, f)
+    os.replace(tmp, ACCOUNTS_FILE)
+
+def pw_hash(pw, salt):
+    return hashlib.pbkdf2_hmac("sha256", pw.encode("utf-8"), bytes.fromhex(salt), 100000).hex()
+
+def token_ok(account, token):
+    """Device accounts need no token; player accounts need a live session token."""
+    if not account.startswith("u:"): return True
+    a = ACCOUNTS.get(account[2:])
+    return bool(a and token and token in a.get("tokens", []))
+
+ACCOUNTS = load_accounts()
+
+# every guest sign-up gets its own account (a fixed id made all guests share one save)
+def new_guest_id(): return "guest" + uuid.uuid4().hex[:12]
 def login_key(uid): return hashlib.sha1(uid.encode()).hexdigest()[:24]
 
 # per-endpoint resultCode that each callback accepts (else ServerError popup)
+# Verified with analyze_rc.py (exact comparands before each string compare):
+#   GetNoticeDataCallback   resultCode != RC0092 -> ServerError
+#   CheckMaintenanceNotice  resultCode in RC0088/89/90
+#   LoginCallback           resultCode in RC0091/DP0023 -> success path, else ServerError
+#   GetMailCallback         resultCode in RC0093/DP0024 (reads "post" list), else ServerError
+#   ranking, guild, signUp, dbCheck ... compare result == "complete" only
 RC = {
     "notice": "RC0092",
     "maintenancenotice": "RC0089",
+    "login": "RC0091",
+    "postbox": "RC0093", "getmail": "RC0093", "getpost": "RC0093",
     "backup": "RC0010",
     "restore": "RC0001",
     "restoredatawithparm": "RC0001",
-    "postbox": "RC0097", "getmail": "RC0097", "getpost": "RC0097",
-    "receivegift": "RC0097", "receivegiftall": "RC0097",
-    "rankinginfo": "RC0097", "rankingshow": "RC0097", "rankingscoresend": "RC0097",
-    "getranking": "RC0097",
 }
 DEFAULT_RC = "RC0089"
 
@@ -87,8 +140,80 @@ class H(BaseHTTPRequestHandler):
         try: return {k: v[0] for k, v in parse_qs(body.decode("utf-8","replace")).items()}
         except Exception: return {}
 
+    def fk(self, path, body):
+        """Server-side save for the FkSync client (JSON in/out)."""
+        op = path.rstrip("/").rsplit("/", 1)[-1].lower()
+        log("\n====", datetime.now().isoformat(timespec="seconds"), self.command, path)
+        if op == "list":
+            rows = []
+            for fn in sorted(os.listdir(SAVES_DIR)) if os.path.isdir(SAVES_DIR) else []:
+                if not fn.endswith(".json"): continue
+                rec = load_account(fn[:-5]); cur = rec.get("current") or {}
+                rows.append({"account": fn[:-5], "hash": cur.get("hash"), "savedAt": cur.get("savedAt"),
+                             "bytes": len(json.dumps(cur.get("data", {}))), "history": len(rec.get("history", []))})
+            return self._send({"ok": True, "accounts": rows})
+        try: req = json.loads(body.decode("utf-8") or "{}")
+        except Exception: return self._send({"ok": False, "error": "bad json"}, code=400)
+        if op in ("register", "login"):
+            name = str(req.get("username", "")).strip(); pw = str(req.get("password", ""))
+            key = name.lower()
+            if not USER_RE.match(name):
+                return self._send({"ok": False, "error": "Tên đăng nhập 3-20 ký tự: chữ, số, _ . -"})
+            if len(pw) < 4:
+                return self._send({"ok": False, "error": "Mật khẩu tối thiểu 4 ký tự"})
+            with _lock:
+                a = ACCOUNTS.get(key)
+                if op == "register":
+                    if a: return self._send({"ok": False, "error": "Tên đăng nhập đã tồn tại"})
+                    salt = os.urandom(16).hex()
+                    a = ACCOUNTS[key] = {"name": name, "salt": salt, "hash": pw_hash(pw, salt),
+                                         "created": now_s(), "tokens": []}
+                elif not a or not hmac.compare_digest(a["hash"], pw_hash(pw, a["salt"])):
+                    return self._send({"ok": False, "error": "Sai tên đăng nhập hoặc mật khẩu"})
+                tok = uuid.uuid4().hex
+                a["tokens"] = (a.get("tokens", []) + [tok])[-TOKENS_MAX:]
+                save_accounts()
+                has_save = bool(load_account("u:" + key).get("current"))
+            log("   [%s %s]" % (op, key))
+            return self._send({"ok": True, "token": tok, "name": a["name"], "account": "u:" + key,
+                               "hasSave": has_save})
+        acct = str(req.get("account") or "")
+        if not acct: return self._send({"ok": False, "error": "no account"}, code=400)
+        if op == "logout":
+            with _lock:
+                a = ACCOUNTS.get(acct[2:]) if acct.startswith("u:") else None
+                if a and req.get("token") in a.get("tokens", []):
+                    a["tokens"].remove(req["token"]); save_accounts()
+            return self._send({"ok": True})
+        if not token_ok(acct, req.get("token")):
+            log("   [auth rejected for %s]" % acct)
+            return self._send({"ok": False, "error": "auth"}, code=403)
+        with _lock:
+            rec = load_account(acct); cur = rec.get("current")
+            if op == "load":
+                log("   [load %s: %s]" % (acct, cur["hash"] if cur else "none"))
+                if not cur: return self._send({"exists": False})
+                return self._send({"exists": True, "hash": cur["hash"], "savedAt": cur["savedAt"], "data": cur["data"]})
+            if op == "save":
+                entry = {"hash": str(req.get("hash", "")), "savedAt": now_s(), "data": req.get("data") or {}}
+                if req.get("conflict"):
+                    entry["conflict"] = True
+                    rec["history"] = ([entry] + rec.get("history", []))[:HISTORY_MAX]
+                    store_account(acct, rec)
+                    log("   [conflict copy kept in history for %s]" % acct)
+                    return self._send({"ok": True, "stored": "history"})
+                if cur and cur["hash"] != entry["hash"]:
+                    rec["history"] = ([cur] + rec.get("history", []))[:HISTORY_MAX]
+                rec["current"] = entry; store_account(acct, rec)
+                log("   [saved %s: %s, %d bytes]" % (acct, entry["hash"], len(json.dumps(entry["data"]))))
+                return self._send({"ok": True, "hash": entry["hash"], "savedAt": entry["savedAt"]})
+        return self._send({"ok": False, "error": "unknown op"}, code=404)
+
     def route(self, body):
-        seg = urlparse(self.path).path.rstrip("/").rsplit("/", 1)[-1].lower()
+        path = urlparse(self.path).path
+        if path.lower().startswith("/fk/"):
+            return self.fk(path, body)
+        seg = path.rstrip("/").rsplit("/", 1)[-1].lower()
         p = self._params(body)
         log("\n====", datetime.now().isoformat(timespec="seconds"), self.command, self.path)
         log("   params:", {k:(v[:40]+'...' if len(v)>40 else v) for k,v in p.items()})
@@ -118,17 +243,26 @@ class H(BaseHTTPRequestHandler):
         # --- auth ---
         if seg in ("signup", "login"):
             if not uid:
-                uid = guest_id(p.get("platform", "guest"))
+                uid = new_guest_id()
             with _lock:
                 u = STATE.setdefault(uid, {})
                 is_new = "0" if u.get("seen") else "1"
                 u["seen"] = True; u.setdefault("created", now_s()); save_state(STATE)
+            # LoginCallback's success path reads these keys. Flags are real JSON
+            # booleans: SimpleJSON's AsBool treats any non-empty string ("0") as true.
+            # version/versiona echo the client's own version so no update prompt.
             return self._send({
-                "result": "complete", "resultCode": DEFAULT_RC,
+                "result": "complete", "resultCode": RC.get(seg, DEFAULT_RC),
                 "userID": uid, "userName": u.get("userName",""), "loginKey": login_key(uid),
                 "isNewUser": is_new, "gameID": uid, "gameIDChanged": "0",
                 "platform": p.get("platform","guest"), "joined": "1", "exist": "1",
-                "maintenance":"0","isBan":"0","ban":"0","isChatBan":"0","banIgnore":"1",
+                "version": p.get("version", "4,06"), "versiona": p.get("version", "4,06"),
+                "loider": p.get("loider", ""),
+                "ban": False, "chatBan": False, "banIgnore": False,
+                "isXmas": False, "xmasEndDate": 0,
+                "registTime": u.get("created", now_s()), "lastRestoreTime": u.get("backupTime", 0),
+                "gamecenterID": "", "appleID": "", "facebookUserID": "", "playgamesID": "",
+                "maintenance": "0",
                 "dataFile": u.get("backup",""), "backUp": u.get("backup",""),
                 "timestamp": now_s(),
             })
@@ -139,7 +273,7 @@ class H(BaseHTTPRequestHandler):
             "result": "complete", "resultCode": rc, "timestamp": now_s(),
             "serverTime": datetime.now(timezone.utc).isoformat(),
             "maintenance":"0","isBan":"0","ban":"0","isChatBan":"0","banIgnore":"1",
-            "userID": uid, "list": [], "content": "", "message": "",
+            "userID": uid, "list": [], "post": [], "content": "", "message": "",
             "totalUsers":"1","rank":"0","score":"0","totalDamage":"0","leaderboard":[],
         }
         return self._send(env)

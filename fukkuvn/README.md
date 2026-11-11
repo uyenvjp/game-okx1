@@ -3,65 +3,86 @@
 **Crack & local-server revival by FukkuVN** · Unity IL2CPP (arm64) · `com.bigshotgames.legendaryItem`
 
 Server gốc `legendaryitem.bigshot-games.xyz` đã ngừng (Makai Electronics đóng 30/06/2025).
-Thư mục này chứa bản APK đã patch + mock server để **chạy lại game offline/local**, build từ
-reverse-engineering thực tế (log runtime + disassemble `libil2cpp.so`), **không dựa theo các
-file .md cũ (sai)**.
+Thư mục này chứa APK đã patch + server để chạy lại game, build từ reverse-engineering thực tế
+(log runtime + disassemble `libil2cpp.so`), **không dựa theo các file .md cũ (sai)**.
 
-> ⚠️ `analysis/FINDINGS.md` và `SUMMARY.md` cũ ở repo gốc SAI nhiều chỗ (nhầm server là
-> `notice.bigshot-games.xyz`, nhầm `/timestamp` là GET...). Thông tin ĐÚNG ở đây.
+> ⚠️ `analysis/FINDINGS.md` và `SUMMARY.md` ở gốc repo SAI nhiều chỗ. Thông tin đúng ở đây.
 
 ## Kết quả
-Game boot → kết nối server local → time-sync → notice → **login khách** → load data →
-**vào gameplay, chơi được**. Tiến trình **tự lưu cục bộ** (file mã hóa của `SaveData`) và có
-**cloud save** qua `/backup` + `/restore`.
+- Game boot → kết nối server → time-sync → notice → đăng nhập → **vào gameplay**, không popup lỗi.
+- **Dữ liệu người chơi lưu trên server**, không phụ thuộc thiết bị: xóa dữ liệu app / cài lại /
+  sang máy khác → đăng nhập là có lại tiến trình.
+- **Tài khoản**: chạm vào màn bắt đầu (TAP TO START) lần đầu → popup **Đăng nhập / Đăng ký**.
+  Đã đăng nhập thì tên người chơi hiện dưới TAP TO START và **không phải đăng nhập lại**.
 
-## Cách chạy (Windows + 1 thiết bị/emulator adb — đã test trên LDPlayer)
+## Cách chạy (Windows + 1 thiết bị/emulator adb — đã test trên LDPlayer 9)
 ```
 run_all.bat
 ```
-Nó: mở mock server → `adb reverse tcp:8080 tcp:<port>` → cài `game_fix_signed.apk` +
-`split_arm64_local.apk` → mở game. Bấm qua popup rồi **"Bắt đầu là khách"**.
+Mở server → `adb reverse tcp:8080 tcp:<port>` → cài `game_fix_signed.apk` + `split_arm64_local.apk`
+→ mở game. Server lưu dữ liệu ở `saves/`, `accounts.json`, `state.json` cạnh `mock_server.py`.
+
+## Dữ liệu trên server (FkSync)
+Toàn bộ tiến trình nằm trong một key PlayerPrefs: **`saveData`** (chuỗi mã hóa bằng khóa hằng số
+trong code → mang sang cài đặt/máy khác vẫn đọc được; userID của game cũng nằm trong đó).
+APK có thêm lớp Java **`FkSync`** (`classes4.dex`), móc vào `UnityPlayerActivity` bằng smali:
+
+| Thời điểm | Việc làm |
+|---|---|
+| `onCreate` (trước khi Unity đọc dữ liệu) | tải save của tài khoản từ `/fk/load`, ghi vào PlayerPrefs |
+| `onPause`, `onDestroy`, mỗi 15 giây | nếu save đổi → đẩy lên `/fk/save` |
+
+Xung đột giải theo 3 chiều với hash lần đồng bộ cuối: chỉ máy đổi → đẩy lên; chỉ server đổi →
+tải về; cả hai đổi → **server thắng**, bản trên máy vẫn được lưu vào lịch sử server.
+Server giữ 20 bản gần nhất mỗi tài khoản (`saves/<tài khoản>.json`).
+Java gọi HTTP qua socket thô vì app không bật cleartext cho `HttpURLConnection`.
+
+**Tài khoản**
+- Chưa đăng nhập: save lưu theo tài khoản thiết bị `dev-<ANDROID_ID>` (chơi được ngay).
+- `/fk/register`, `/fk/login`: mật khẩu băm PBKDF2-SHA256 + salt, trả token phiên; save của
+  tài khoản `u:<tên>` chỉ đọc/ghi được với token hợp lệ (sai → 403 → client tự đăng xuất).
+- **Đăng ký**: tiến trình đang chơi gắn vào tài khoản mới.
+  **Đăng nhập** tài khoản đã có save khác → ghi save đó và tự khởi động lại game để nạp.
+- Phiên được nhớ trong `fukkuvn_sync` prefs. Chạm vào tên người chơi → **Đăng xuất**.
+- Màn bắt đầu / gameplay nhận biết qua log Unity của chính game (`LogInControl:readyToPlay`,
+  `ChattingManager:ChatConnect`). Nút **Để sau** cho phép chơi bằng tài khoản thiết bị.
 
 ## Server thật & protocol (đã xác minh)
-- Base API = `https://legendaryitem.bigshot-games.xyz/` (field `WebAccess.Adress`, serialize
-  trong block nén của `data.unity3d`). Đã patch bằng **UnityPy** → `http://127.0.0.1:8080/`.
-- Response parse bằng **SimpleJSON**. `signUpCallback`/`LoginCallback`: success khi
-  `json["result"] == "complete"`, rồi đọc `json["userID"]`.
-- Mỗi callback khác check `json["resultCode"]` theo set riêng, sai → popup `ServerError`.
-  Mã đúng từng endpoint (WebKeys value = tên field bỏ `_`):
+- Base API = `https://legendaryitem.bigshot-games.xyz/` (`WebAccess.Adress`, serialize trong
+  block nén của `data.unity3d`) → patch bằng **UnityPy** thành `http://127.0.0.1:8080/`.
+  Literal `notice.*` trong `global-metadata.dat` cũng trỏ về server local.
+- Response parse bằng **SimpleJSON**. Lưu ý: `AsBool` coi mọi chuỗi không rỗng (cả `"0"`) là
+  `true` → cờ như `ban` phải trả JSON `false`.
+- Mã `resultCode` đúng từng callback (lấy bằng `analyze_rc.py`, giá trị = tên field bỏ `_`):
 
-| Endpoint | request | resultCode đúng |
+| Endpoint | Callback | Thành công khi |
 |---|---|---|
-| `/timestamp` | `timestamp=timestamp` | *(trả epoch dạng text)* |
-| `/notice` | `lang=vi` | `RC0092` |
-| `/maintenanceNotice` | `userID=` | `RC0088`/`RC0089`/`RC0090` |
-| `/signUp`,`/login` | `platform=guest` / `userID=...` | `result="complete"` (+ `userID`,`loginKey`) |
-| `/backup` | save blob | `RC0010` |
-| `/restore` | `userID` | `RC0001` (RestoreObj) |
-| `/postBox`,`/getMail` | `userID` | `RC0097` |
-| ranking | — | `RC0097` |
+| `/timestamp` | TimeStamp | trả epoch giây dạng text |
+| `/notice` | GetNoticeDataCallback | `resultCode == RC0092` |
+| `/maintenanceNotice` | CheckMaintenanceNoticeCallback | `resultCode` ∈ RC0088/89/90 |
+| `/login` | LoginCallback | `resultCode` ∈ **RC0091**/DP0023 (đọc version, ban, registTime…) |
+| `/signUp` | signUpCallback | `result == "complete"` + `userID` |
+| `/postBox` | GetMailCallback | `resultCode` ∈ **RC0093**/DP0024, đọc mảng `post` |
+| `/backup`, `/restore` | backupData / restoreData | RC0010 / RC0001 |
+| ranking, guild, dbCheck… | | `result == "complete"` |
+
+Server cũng trả `Connection: close` (UnityWebRequest tái dùng socket keep-alive gây
+"Unable to complete SSL connection") và cấp **userID khách riêng** cho mỗi lần `/signUp`.
 
 ## File trong thư mục
-- `game_fix_signed.apk` + `split_arm64_local.apk` — APK đã patch, ký (cài bằng install-multiple)
-- `mock_server.py` — server đầy đủ, stateful (lưu `state.json` theo userID)
-- `patch_bundle.py` — sửa `Adress` trong `data.unity3d` (UnityPy)
-- `repack.py`, `patch_metadata.py` — đóng gói lại APK / patch metadata
-- `disasm.py`, `scan_rc.py` — công cụ disassemble libil2cpp + quét mã resultCode
+- `game_fix_signed.apk` + `split_arm64_local.apk` — APK đã patch (server + FkSync + tài khoản), ký
+- `mock_server.py` — server đầy đủ: API game, save trên server, tài khoản
+- `fksync/src/com/fukkuvn/FkSync.java` — lớp đồng bộ + popup tài khoản
+- `fksync/build.py` — build lại APK: `py -3 fksync/build.py <apk-đã-patch-server> <out.apk>`
+- `patch_bundle.py`, `patch_metadata.py`, `repack.py` — patch URL server vào APK gốc
+- `analyze_rc.py`, `disasm.py` — disassemble libil2cpp, đọc đúng mã resultCode từng callback
 - `run_all.bat`, `install_game.bat` — chạy nhanh
 - `local.keystore` — key ký APK (storepass/keypass: android)
-- `gameplay.png`, `login_screen.png` — ảnh minh chứng
+- `gameplay.png`, `login_screen.png`, `account_popup.png`, `restored_from_server.png` — ảnh minh chứng
 
-## Đã xử lý popup lỗi kết nối (SSL)
-- APK giờ patch CẢ metadata (literal `notice.*`) → không còn call HTTPS tới domain chết.
-- `mock_server.py` trả `Connection: close` (UnityWebRequest/libcurl reuse keep-alive socket
-  gây ConnectionError "Unable to complete SSL connection"). → hết popup lỗi.
-- Popup còn lại chỉ là notice hợp lệ "Thông báo kết thúc dịch vụ" (nội dung game, bấm OK qua).
-
-## Còn lại (minor, không chặn chơi)
-- Một call phụ vẫn gọi HTTPS tới domain chết → popup **"Unable to complete SSL connection"**
-  (bấm OK qua được). Nhiều khả năng là `WebAccessStatics.Adress` thứ hai / socket.io chat —
-  patch nốt instance đó trong bundle là hết.
-- Shop IAP không chạy trên emulator (bình thường). Guild/ranking trả dữ liệu rỗng.
+## Còn lại
+- Shop IAP không chạy trên emulator (bình thường). Guild/ranking/hộp thư trả dữ liệu rỗng.
+- Popup "Thông báo kết thúc dịch vụ" là notice có sẵn trong client, bấm OK là qua.
 
 ---
-*Credit: **FukkuVN** — reverse engineering, APK patch, mock server.*
+*Credit: **FukkuVN** — reverse engineering, APK patch, server, đồng bộ dữ liệu.*

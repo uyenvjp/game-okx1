@@ -46,3 +46,8 @@ Dựng đúng JSON response cho `/signUp` (và `/login`, `/save`, `/load`, `/not
 
 ---
 *Credit: **FukkuVN** — reverse engineering, APK patch, mock server.*
+
+## Đính chính (11/11)
+`scan_rc.py` cũ bắt nhầm mọi lệnh `ldr [reg, #0x4a0]` nên gán sai `RC0097` cho `/postBox` và
+ranking. Bản đúng (`analyze_rc.py`): `/login` = **RC0091**, `/postBox` = **RC0093**, ranking dùng
+`result == "complete"`. Bảng đầy đủ + phần lưu dữ liệu trên server/tài khoản: xem `README.md`.
