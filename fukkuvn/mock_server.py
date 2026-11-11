@@ -76,7 +76,10 @@ def store_account(account, rec):
 # accounts ("dev-...") stay open so a player can play before signing in.
 ACCOUNTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "accounts.json")
 USER_RE = re.compile(r"^[A-Za-z0-9_.-]{3,20}$")
-TOKENS_MAX = 10
+# one live session per account: signing in elsewhere revokes the previous device's
+# token, so its next sync gets 403 and the client signs out instead of both devices
+# writing the same save
+TOKENS_MAX = 1
 
 def load_accounts():
     try:
@@ -171,10 +174,11 @@ class H(BaseHTTPRequestHandler):
                 elif not a or not hmac.compare_digest(a["hash"], pw_hash(pw, a["salt"])):
                     return self._send({"ok": False, "error": "Sai tên đăng nhập hoặc mật khẩu"})
                 tok = uuid.uuid4().hex
+                revoked = len(a.get("tokens", [])) + 1 - TOKENS_MAX
                 a["tokens"] = (a.get("tokens", []) + [tok])[-TOKENS_MAX:]
                 save_accounts()
                 has_save = bool(load_account("u:" + key).get("current"))
-            log("   [%s %s]" % (op, key))
+            log("   [%s %s%s]" % (op, key, ", %d older session(s) revoked" % revoked if revoked > 0 else ""))
             return self._send({"ok": True, "token": tok, "name": a["name"], "account": "u:" + key,
                                "hasSave": has_save})
         acct = str(req.get("account") or "")
@@ -188,6 +192,8 @@ class H(BaseHTTPRequestHandler):
         if not token_ok(acct, req.get("token")):
             log("   [auth rejected for %s]" % acct)
             return self._send({"ok": False, "error": "auth"}, code=403)
+        if op == "check":  # session still valid (clients poll this while idle)
+            return self._send({"ok": True})
         with _lock:
             rec = load_account(acct); cur = rec.get("current")
             if op == "load":

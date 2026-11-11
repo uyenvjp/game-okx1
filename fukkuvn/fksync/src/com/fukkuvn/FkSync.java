@@ -31,8 +31,6 @@ import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -53,14 +51,20 @@ import java.util.UUID;
  *   onDestroy -> push
  * plus a background loop that pushes whenever the save changed.
  *
- * Accounts: before signing in, the save is kept under a per-device account. On
- * the start screen the first tap opens a native login/register popup; a signed-in
- * player's name is shown under TAP TO START and the session is remembered.
- * Register adopts the current progress; logging into an account that already
- * has a different save installs it and restarts the game.
+ * Every local save has an owner (the account it was loaded or created for). A
+ * save is only ever pushed to, or kept for, its owner: anything else is dropped
+ * before Unity reads PlayerPrefs, so progress never leaks between accounts.
+ *
+ * Accounts: before signing in, the save is kept under a random per-install
+ * account. On the start screen the first tap opens a native login/register
+ * popup; a signed-in player's name is shown under the start button and the
+ * session is remembered. A new account starts a fresh game; an existing one
+ * gets its server save installed and the game restarts. The server keeps one
+ * session per account: when another device signs in, this one is told and
+ * restarts signed out.
  *
  * Start screen / gameplay are detected from the game's own Unity log lines
- * (read from this app's logcat): LogInControl:readyToPlay, ChattingManager:ChatConnect.
+ * (read from this app's logcat): LogInControl:LogInStart, ChattingManager:ChatConnect.
  *
  * Conflicts are resolved 3-way against the hash of the last successful sync
  * ("base"): local-only change -> push, server-only change -> restore, both ->
@@ -78,8 +82,10 @@ public final class FkSync {
     private static final String VERSION_KEY = "__UNITY_PLAYERPREFS_VERSION__";
     private static final long PULL_WAIT_MS = 4000;
     private static final long LOOP_MS = 15000;
-    private static final String SIG_START_SCREEN = "LogInControl:readyToPlay";
+    private static final String SIG_START_SCREEN = "LogInControl:LogInStart";
     private static final String SIG_GAMEPLAY = "ChattingManager:ChatConnect";
+    private static final String KICKED_MSG =
+            "Tài khoản đã được đăng nhập trên thiết bị khác. Vui lòng đăng nhập lại.";
     private static final int THEME = AlertDialog.THEME_DEVICE_DEFAULT_DARK;
 
     private static final Object LOCK = new Object();
@@ -90,11 +96,14 @@ public final class FkSync {
     private static boolean late;
     private static Thread loop;
     // set while an account switch waits for its restart: no pushes in between
-    private static JSONObject pendingRestore;
-    private static String pendingHash;
+    private static volatile boolean switching;
+    // owner of a local save that belongs to no account (dropped on next start)
+    private static final String NOBODY = "-";
+    // why the last session ended, shown on the start screen
+    private static volatile String signedOutReason;
 
     // start-screen UI state, main thread only
-    private static boolean onStartScreen, inGame, skipLogin, dialogShown;
+    private static boolean onStartScreen, inGame, skipLogin, dialogShown, kickShown;
     private static TextView nameLabel;
 
     private FkSync() {}
@@ -106,6 +115,7 @@ public final class FkSync {
             activity = a;
             ctx = a.getApplicationContext();
             deviceAccount = deviceAccountId();
+            enforceOwner();
             Log.i(TAG, "account=" + account() + (loggedIn() ? " (" + sessionName() + ")" : ""));
             Thread t = new Thread(new Runnable() {
                 public void run() { pull(true); }
@@ -140,6 +150,19 @@ public final class FkSync {
 
     // ---------------------------------------------------------------- sync
 
+    /** Drops a local save that belongs to another account; runs before Unity reads prefs. */
+    private static void enforceOwner() {
+        String acct = account();
+        String owner = owner();
+        Log.i(TAG, "local save " + shortHash(gamePrefs().getString(SAVE_KEY, null))
+                + " owner=" + owner + " account=" + acct);
+        if (gamePrefs().contains(SAVE_KEY) && !acct.equals(owner)) {
+            gamePrefs().edit().remove(SAVE_KEY).commit();
+            Log.i(TAG, "dropped local save of " + owner + " (not " + acct + ")");
+        }
+        setOwner(acct);
+    }
+
     private static void pull(boolean retryOnAuth) {
         try {
             String local = gamePrefs().getString(SAVE_KEY, null);
@@ -149,9 +172,11 @@ public final class FkSync {
             try {
                 res = new JSONObject(http("/fk/load", authReq().toString()));
             } catch (Exception e) {
-                if (isAuthError(e) && retryOnAuth) {
+                if (isAuthError(e) && retryOnAuth && loggedIn()) {
                     Log.w(TAG, "session rejected by server, signing out");
+                    signedOutReason = KICKED_MSG;
                     clearSession();
+                    enforceOwner();
                     pull(false);
                     return;
                 }
@@ -159,7 +184,18 @@ public final class FkSync {
                 return;
             }
             if (!res.optBoolean("exists")) {
-                if (local != null) push(false);
+                if (local == null) return;
+                if (base.isEmpty()) {
+                    push(false); // progress made here that was never uploaded yet
+                } else {
+                    // it was synced before and the server no longer has it: server wins
+                    synchronized (LOCK) {
+                        if (late) return;
+                        gamePrefs().edit().remove(SAVE_KEY).commit();
+                        setBase("");
+                    }
+                    Log.i(TAG, "server has no save for " + account() + " any more; local copy dropped");
+                }
                 return;
             }
             String serverHash = res.optString("hash");
@@ -190,7 +226,8 @@ public final class FkSync {
 
     /** Uploads the current save. conflict=true stores it as history only. */
     private static synchronized boolean push(boolean conflict) throws Exception {
-        if (pendingRestore != null) return false; // switching accounts: local save is stale
+        if (switching) return false; // switching accounts: local save is stale
+        if (!account().equals(owner())) return false; // never upload someone else's progress
         SharedPreferences gp = gamePrefs();
         String save = gp.getString(SAVE_KEY, null);
         if (save == null) return false;
@@ -208,10 +245,7 @@ public final class FkSync {
         try {
             res = new JSONObject(http("/fk/save", req.toString()));
         } catch (Exception e) {
-            if (isAuthError(e) && loggedIn()) {
-                Log.w(TAG, "session rejected by server, signing out");
-                clearSession();
-            }
+            if (isAuthError(e) && loggedIn()) kicked();
             throw e;
         }
         if (!conflict && res.optBoolean("ok")) {
@@ -219,6 +253,17 @@ public final class FkSync {
             Log.i(TAG, "pushed save " + h + " to " + account());
         }
         return true;
+    }
+
+    /** While idle, asks the server whether this session is still the account's live one. */
+    private static void checkSession() throws Exception {
+        if (!loggedIn() || switching) return;
+        try {
+            http("/fk/check", authReq().toString());
+        } catch (Exception e) {
+            if (isAuthError(e) && loggedIn()) kicked();
+            throw e;
+        }
     }
 
     private static Thread pushAsync(final long delayMs) {
@@ -244,7 +289,7 @@ public final class FkSync {
                 while (true) {
                     try {
                         Thread.sleep(LOOP_MS);
-                        push(false);
+                        if (!push(false)) checkSession();
                     } catch (InterruptedException e) {
                         return;
                     } catch (Throwable e) {
@@ -257,13 +302,13 @@ public final class FkSync {
         loop.start();
     }
 
-    /** Writes a server save into PlayerPrefs; keys missing from data are removed. */
+    /** Writes a server save into PlayerPrefs; a save missing from data is removed. */
     private static void writePrefs(JSONObject data) throws Exception {
         SharedPreferences gp = gamePrefs();
         SharedPreferences.Editor ed = gp.edit();
         for (String k : KEYS) {
             if (data.has(k)) ed.putString(k, data.getString(k));
-            else ed.remove(k);
+            else if (k.equals(SAVE_KEY)) ed.remove(k);
         }
         if (!gp.contains(VERSION_KEY)) ed.putInt(VERSION_KEY, 1);
         ed.commit();
@@ -272,63 +317,56 @@ public final class FkSync {
     // ------------------------------------------------------------- accounts
 
     /**
-     * Makes the signed-in account current. Returns true when the account's server
-     * save differs from what is loaded now, i.e. the game must restart to load it.
+     * Makes the signed-in account current. Unless the loaded save already is the
+     * account's server copy, the local save is disowned and true is returned: the
+     * game restarts, and the new process drops the local save before Unity starts
+     * and installs the account's server save (or starts fresh for a new account).
+     * Nothing is written to PlayerPrefs here: this process's Unity may still save
+     * its in-memory game on the way down (killProcess is not immediate on every ROM).
      */
     private static boolean adopt(String acct, String token, String name, boolean hasSave) throws Exception {
         synchronized (FkSync.class) {
             setSession(name, acct, token);
             if (hasSave) {
                 JSONObject res = new JSONObject(http("/fk/load", authReq().toString()));
-                if (res.optBoolean("exists")) {
-                    String serverHash = res.optString("hash");
-                    if (serverHash.equals(hash(gamePrefs().getString(SAVE_KEY, null)))) {
-                        setBase(serverHash);
-                        return false;
-                    }
-                    pendingHash = serverHash;
-                    pendingRestore = res.getJSONObject("data");
-                    return true;
+                String h = res.optString("hash");
+                if (res.optBoolean("exists") && h.equals(hash(gamePrefs().getString(SAVE_KEY, null)))) {
+                    setOwner(acct);
+                    setBase(h);
+                    return false;
                 }
             }
-            push(false); // new or empty account takes over the current progress
-            return false;
+            switching = true;
+            setOwner(NOBODY);
+            return true;
         }
     }
 
+    /** Signs out; the restarted game goes back to this device's own save. */
     private static void logout() {
         synchronized (FkSync.class) {
             try { push(false); } catch (Throwable e) { Log.w(TAG, "final push failed: " + e); }
             try { http("/fk/logout", authReq().toString()); } catch (Throwable ignored) { }
+            switching = true;
             clearSession();
-            // go back to this device's own save instead of keeping the account's
-            JSONObject data = new JSONObject();
-            String h = "";
-            try {
-                JSONObject res = new JSONObject(http("/fk/load", authReq().toString()));
-                if (res.optBoolean("exists")) {
-                    data = res.getJSONObject("data");
-                    h = res.optString("hash");
-                }
-            } catch (Throwable e) {
-                Log.w(TAG, "device save unavailable: " + e);
-            }
-            pendingRestore = data;
-            pendingHash = h;
+            setOwner(NOBODY);
         }
     }
 
-    /** Applies a pending account switch and relaunches the game process. */
+    /** The server dropped this session (signed in elsewhere): stop syncing, tell the player. */
+    private static void kicked() {
+        Log.w(TAG, "session ended by the server (signed in on another device)");
+        clearSession(); // owner stays the old account, so nothing more is pushed
+        MAIN.post(new Runnable() {
+            public void run() { showKicked(); }
+        });
+    }
+
+    /** Relaunches the game process; the new process sorts out which save to load. */
     private static void restartGame() {
         synchronized (FkSync.class) {
-            try {
-                if (pendingRestore != null) {
-                    writePrefs(pendingRestore);
-                    setBase(pendingHash);
-                }
-            } catch (Throwable e) {
-                Log.w(TAG, "restore before restart failed", e);
-            }
+            switching = true;
+            Log.i(TAG, "restarting for " + account());
             Intent launch = ctx.getPackageManager().getLaunchIntentForPackage(ctx.getPackageName());
             activity.startActivity(Intent.makeRestartActivityTask(launch.getComponent()));
             Process.killProcess(Process.myPid());
@@ -412,6 +450,12 @@ public final class FkSync {
         if (inGame) return;
         onStartScreen = true;
         if (loggedIn()) showName();
+        String reason = signedOutReason;
+        if (reason != null) {
+            signedOutReason = null;
+            new AlertDialog.Builder(activity, THEME).setTitle("Đã đăng xuất")
+                    .setMessage(reason).setPositiveButton("OK", null).show();
+        }
     }
 
     private static void enterGame() {
@@ -424,6 +468,20 @@ public final class FkSync {
         if (nameLabel == null || inGame || !loggedIn()) return;
         nameLabel.setText("Người chơi: " + sessionName());
         nameLabel.setVisibility(View.VISIBLE);
+    }
+
+    private static void showKicked() {
+        if (kickShown || activity == null) return;
+        kickShown = true;
+        if (nameLabel != null) nameLabel.setVisibility(View.GONE);
+        new AlertDialog.Builder(activity, THEME)
+                .setTitle("Đã đăng xuất")
+                .setMessage(KICKED_MSG + " Trò chơi sẽ khởi động lại.")
+                .setCancelable(false)
+                .setPositiveButton("OK", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface di, int w) { restartGame(); }
+                })
+                .show();
     }
 
     private static void showLoginDialog() {
@@ -557,26 +615,30 @@ public final class FkSync {
     // --------------------------------------------------------------- state
 
     /**
-     * Save key for a player who has not signed in: an override in
-     * Android/data/<pkg>/files/fk_account.txt, else a stable per-device id.
+     * Save key for a player who has not signed in: random per install. Earlier
+     * builds used ANDROID_ID, which cloned emulators share, so such ids are
+     * replaced (keeping the local progress for this install).
      */
     private static String deviceAccountId() {
-        try {
-            File dir = ctx.getExternalFilesDir(null);
-            File f = dir == null ? null : new File(dir, "fk_account.txt");
-            if (f != null && f.isFile()) {
-                String s = new String(readAll(new FileInputStream(f)), "UTF-8").trim();
-                if (!s.isEmpty()) return s;
-            }
-        } catch (Throwable ignored) {
-        }
         String saved = state().getString("account", null);
-        if (saved != null) return saved;
-        String id = Settings.Secure.getString(ctx.getContentResolver(), Settings.Secure.ANDROID_ID);
-        if (id == null || id.isEmpty()) id = UUID.randomUUID().toString().replace("-", "");
-        id = "dev-" + id;
-        state().edit().putString("account", id).commit();
+        String androidId = Settings.Secure.getString(ctx.getContentResolver(), Settings.Secure.ANDROID_ID);
+        String legacy = "dev-" + androidId;
+        if (saved != null && !saved.equals(legacy)) return saved;
+        String id = "dev-" + UUID.randomUUID().toString().replace("-", "").substring(0, 20);
+        SharedPreferences.Editor ed = state().edit().putString("account", id);
+        String owner = state().getString("owner", null);
+        if (saved != null && (owner == null || owner.equals(saved)) && !loggedIn()) ed.putString("owner", id);
+        ed.commit();
         return id;
+    }
+
+    /** Account the local save belongs to. Saves from before ownership tracking belong to the current account. */
+    private static String owner() {
+        return state().getString("owner", account());
+    }
+
+    private static void setOwner(String acct) {
+        state().edit().putString("owner", acct).commit();
     }
 
     private static boolean loggedIn() {
@@ -626,6 +688,10 @@ public final class FkSync {
 
     private static void setBase(String h) {
         state().edit().putString("base:" + account(), h).commit();
+    }
+
+    private static String shortHash(String s) {
+        return s == null ? "none" : hash(s).substring(0, 12);
     }
 
     private static String hash(String s) {

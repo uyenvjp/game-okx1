@@ -38,14 +38,22 @@ Server giữ 20 bản gần nhất mỗi tài khoản (`saves/<tài khoản>.jso
 Java gọi HTTP qua socket thô vì app không bật cleartext cho `HttpURLConnection`.
 
 **Tài khoản**
-- Chưa đăng nhập: save lưu theo tài khoản thiết bị `dev-<ANDROID_ID>` (chơi được ngay).
+- Chưa đăng nhập: save lưu theo tài khoản thiết bị `dev-<ID ngẫu nhiên theo bản cài>`
+  (không dùng ANDROID_ID vì các emulator nhân bản trùng nhau). Nút **Để sau** chơi theo kiểu này.
 - `/fk/register`, `/fk/login`: mật khẩu băm PBKDF2-SHA256 + salt, trả token phiên; save của
-  tài khoản `u:<tên>` chỉ đọc/ghi được với token hợp lệ (sai → 403 → client tự đăng xuất).
-- **Đăng ký**: tiến trình đang chơi gắn vào tài khoản mới.
-  **Đăng nhập** tài khoản đã có save khác → ghi save đó và tự khởi động lại game để nạp.
+  tài khoản `u:<tên>` chỉ đọc/ghi được với token hợp lệ.
+- **Mỗi tài khoản chỉ một phiên**: đăng nhập ở máy khác thu hồi token cũ. Máy cũ phát hiện
+  trong ≤15 giây (`/fk/check` khi rảnh), báo "đã đăng nhập trên thiết bị khác" và khởi động lại
+  ở trạng thái chưa đăng nhập. Phần tiến trình máy cũ chưa kịp lưu sẽ bị bỏ.
+- **Save trên máy luôn có chủ**: chỉ được giữ/đẩy lên cho đúng tài khoản đã tải hoặc tạo ra nó,
+  không phải của tài khoản hiện tại thì bị xóa trước khi Unity đọc. Vì vậy tài khoản mới luôn
+  **bắt đầu game mới**, đăng nhập tài khoản cũ thì tải save của nó từ server.
+- Server không còn save (hoặc tài khoản) đã từng đồng bộ → save trên máy bị xóa theo server.
+- Đổi tài khoản / đăng xuất: không ghi PlayerPrefs ở tiến trình đang tắt (Unity vẫn có thể lưu
+  save cũ trong lúc tắt), chỉ đánh dấu save là "không thuộc ai" rồi khởi động lại.
 - Phiên được nhớ trong `fukkuvn_sync` prefs. Chạm vào tên người chơi → **Đăng xuất**.
-- Màn bắt đầu / gameplay nhận biết qua log Unity của chính game (`LogInControl:readyToPlay`,
-  `ChattingManager:ChatConnect`). Nút **Để sau** cho phép chơi bằng tài khoản thiết bị.
+- Màn bắt đầu / gameplay nhận biết qua log Unity của chính game (`LogInControl:LogInStart`,
+  `ChattingManager:ChatConnect`).
 
 ## Server thật & protocol (đã xác minh)
 - Base API = `https://legendaryitem.bigshot-games.xyz/` (`WebAccess.Adress`, serialize trong
