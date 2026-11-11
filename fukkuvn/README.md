@@ -25,6 +25,8 @@ Mở server → `adb reverse tcp:8080 tcp:<port>` → cài `game_fix_signed.apk`
 ## Dữ liệu trên server (FkSync)
 Toàn bộ tiến trình nằm trong một key PlayerPrefs: **`saveData`** (chuỗi mã hóa bằng khóa hằng số
 trong code → mang sang cài đặt/máy khác vẫn đọc được; userID của game cũng nằm trong đó).
+Game còn giữ một bản sao ở file `Android/data/com.bigshotgames.legendaryItem/saveData.txt` và
+**đọc file này trước** PlayerPrefs, nên mỗi khi bỏ hay thay save, FkSync xóa cả file này.
 APK có thêm lớp Java **`FkSync`** (`classes4.dex`), móc vào `UnityPlayerActivity` bằng smali:
 
 | Thời điểm | Việc làm |

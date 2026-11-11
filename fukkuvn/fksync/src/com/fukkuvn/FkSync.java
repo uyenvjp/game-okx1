@@ -31,6 +31,7 @@ import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -78,6 +79,7 @@ public final class FkSync {
     private static final String HOST = "127.0.0.1";
     private static final int PORT = 8080;
     private static final String SAVE_KEY = "saveData";
+    private static final String SAVE_FILE = "saveData.txt";
     private static final String[] KEYS = {SAVE_KEY, "currentLan"};
     private static final String VERSION_KEY = "__UNITY_PLAYERPREFS_VERSION__";
     private static final long PULL_WAIT_MS = 4000;
@@ -156,11 +158,32 @@ public final class FkSync {
         String owner = owner();
         Log.i(TAG, "local save " + shortHash(gamePrefs().getString(SAVE_KEY, null))
                 + " owner=" + owner + " account=" + acct);
-        if (gamePrefs().contains(SAVE_KEY) && !acct.equals(owner)) {
-            gamePrefs().edit().remove(SAVE_KEY).commit();
+        if (!acct.equals(owner)) {
+            dropLocalSave();
             Log.i(TAG, "dropped local save of " + owner + " (not " + acct + ")");
         }
         setOwner(acct);
+    }
+
+    /**
+     * Removes both copies of the game's save. SaveData also writes the save to a
+     * file (saveData.txt in the app's external data dir) and loads that file
+     * before PlayerPrefs, so clearing PlayerPrefs alone brings the old game back.
+     */
+    private static void dropLocalSave() {
+        gamePrefs().edit().remove(SAVE_KEY).commit();
+        deleteSaveFiles();
+    }
+
+    private static void deleteSaveFiles() {
+        File ext = ctx.getExternalFilesDir(null);
+        File[] dirs = {ext == null ? null : ext.getParentFile(), ext,
+                ctx.getFilesDir().getParentFile(), ctx.getFilesDir()};
+        for (File dir : dirs) {
+            if (dir == null) continue;
+            File f = new File(dir, SAVE_FILE);
+            if (f.isFile() && f.delete()) Log.i(TAG, "deleted " + f);
+        }
     }
 
     private static void pull(boolean retryOnAuth) {
@@ -191,7 +214,7 @@ public final class FkSync {
                     // it was synced before and the server no longer has it: server wins
                     synchronized (LOCK) {
                         if (late) return;
-                        gamePrefs().edit().remove(SAVE_KEY).commit();
+                        dropLocalSave();
                         setBase("");
                     }
                     Log.i(TAG, "server has no save for " + account() + " any more; local copy dropped");
@@ -216,6 +239,7 @@ public final class FkSync {
                     return;
                 }
                 writePrefs(res.getJSONObject("data"));
+                deleteSaveFiles(); // else SaveData would load its stale file copy instead
                 setBase(serverHash);
             }
             Log.i(TAG, "restored save from server " + serverHash);
