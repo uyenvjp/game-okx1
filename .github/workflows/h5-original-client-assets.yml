@@ -1,0 +1,34 @@
+name: Extract original DungeonCorp client sprites
+on:
+  push:
+    branches: ["h5/client-goc-asset-port"]
+    paths: ["H5_REAL_PORT/**", ".github/workflows/h5-original-client-assets.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Unity asset decoder
+        run: python -m pip install "UnityPy>=1.20,<2" Pillow
+      - name: Extract only original images
+        run: python H5_REAL_PORT/extract_original_assets.py --out H5_REAL_PORT/build
+      - name: Print inventory
+        if: always()
+        run: |
+          if [ -f H5_REAL_PORT/build/manifest.json ]; then
+            python -c "import json; d=json.load(open('H5_REAL_PORT/build/manifest.json')); print({k:d[k] for k in ['objects','images_exported','sprites_exported','textures_exported']})"
+          fi
+      - name: Package offline original asset inspector
+        uses: actions/upload-artifact@v4
+        with:
+          name: DungeonCorp-original-Unity-visuals
+          path: H5_REAL_PORT/build
+          if-no-files-found: error
+          retention-days: 14
